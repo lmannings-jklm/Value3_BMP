@@ -61,5 +61,5 @@ This application is optimized for deployment to **shinyapps.io**.
 This terminal is a tool for financial analysis and is intended for educational and research purposes only. It does not constitute financial advice. Always verify data via official SEC filings (provided via the in-app link) before making investment decisions.
 
 ---
-**Author:** [Your Name/GitHub Handle]  
+**Author:** [Larry Mannings/JKLM Data Analytics/lmannings-jklm]  
 **Methodology:** Adam Seessel, *Where the Money Is* (2022)
