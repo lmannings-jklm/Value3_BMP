@@ -1,4 +1,4 @@
-
+![Header Image](Value_3_0_BMP_Tool.png)
 # Value 3.0 Analyst Terminal 📈
 
 An automated equity analysis platform built in **R Shiny**, based on the "Value 3.0" methodology established by Adam Seessel in his book, *Where the Money Is: Value Investing in the Digital Age*.
