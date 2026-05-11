@@ -2,6 +2,9 @@ library(shiny)
 library(tidyverse)
 library(bslib)
 library(bsicons)
+library(jsonlite)
+library(httr)
+library(scales)
 
 source("logic.R")
 
