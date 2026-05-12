@@ -20,7 +20,7 @@ To use the **Value 3.0 Terminal** effectively, you must transition from being a 
 
 Below is a guide on how to set your sliders for the three categories of companies, using the rationale strictly derived from Chapters 8 and 9 of **"Where the Money Is."**
 
-## Use Case Analysis
+## 🧭 Use Case Analysis
 
 ### Case Example 1: The Digital "Toll Bridge" (Pure Software)
 **Relevant Tickers:** `INTU` (Intuit), `MSFT` (Microsoft), `ADBE` (Adobe), `GOOGL` (Alphabet)
