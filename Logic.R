@@ -6,112 +6,90 @@ library(scales)
 # Helper for null/empty safety
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0 && !is.na(a)) a else b
 
-# --- 1. Business Quality Automation (The "B" in BMP) ---
-# Logic designed to assist qualitative assessment via financial proxies.
+# --- 1. Analyst Logic: B-Score Hints ---
 get_business_suggestions <- function(ticker, financials) {
-    api_key <- Sys.getenv("FMP_API_KEY")
-    
-    # Fetch Growth Data for Proxy #2 (Ch 8, Page 131)
-    growth_url <- paste0("https://financialmodelingprep.com/stable/financial-growth?symbol=", ticker)
-    growth_res <- GET(growth_url, query = list(limit = 1, apikey = api_key))
-    
-    rev_growth <- 0.08 
-    if(status_code(growth_res) == 200) {
-        g_data <- fromJSON(content(growth_res, "text", encoding = "UTF-8"))
-        if(is.data.frame(g_data) && nrow(g_data) > 0) {
-            rev_growth <- as.numeric(g_data$revenueGrowth[1]) %||% 0.08
-        }
-    }
-    
-    # 1. Low Market Share Proxy (Page 91)
-    # Rationale: Single-digit shares of a massive market. 
-    # Logic: Total Revenue < $50B (50,000M)
+    if (is.null(financials) || nrow(financials) == 0) return(list(b1=F, b2=F, b3=F, summary="Waiting..."))
     total_rev <- sum(as.numeric(financials$revenue), na.rm = TRUE)
-    b1_auto <- total_rev < 50000 
-    
-    # 2. Large/Growing Market Proxy (Page 131)
-    # Rationale: CAGR > 10% indicates a "rising tide" or escape velocity.
-    b2_auto <- rev_growth > 0.10
-    
-    # 3. Sustainable Moat Proxy (Page 80)
-    # Rationale: Adjusted margins > 25% are the signature of a digital "Toll Bridge".
     max_margin <- max(as.numeric(financials$adj_margin), na.rm = TRUE)
-    b3_auto <- max_margin > 0.25
-    
-    summary_text <- case_when(
-        b3_auto && b2_auto ~ "Strong Value 3.0 Signature: High-margin growth engine.",
-        b3_auto ~ "Moat signature confirmed by margins.",
-        b2_auto ~ "High growth detected; verify moat durability manually.",
-        TRUE ~ "Legacy/Commodity profile: Requires deep manual 10-K review."
-    )
-    
-    list(b1 = b1_auto, b2 = b2_auto, b3 = b3_auto, summary = summary_text)
+    list(b1 = total_rev < 50000, b2 = TRUE, b3 = max_margin > 0.25, 
+         summary = if_else(max_margin > 0.30, "Strong Moat signature detected.", "Standard profile."))
 }
 
-# --- 2. API Connectors (Stable Premium) ---
+# --- 2. The Unpacking Engine ---
 
-get_fmp_segments <- function(ticker) {
-    fmp_key <- Sys.getenv("FMP_API_KEY")
+get_fmp_segments <- function(ticker, fmp_key) {
+    clean_key <- gsub("[[:space:]]", "", fmp_key)
     
-    # v4 Unpacking (Ch 8 Method)
-    url_v4 <- paste0("https://financialmodelingprep.com/stable/revenue-product-segmentation?symbol=", ticker)
-    message(paste(">>> FMP STABLE: Unpacking", ticker))
-    res_v4 <- GET(url_v4, query = list(period = "annual", structure = "flat", apikey = fmp_key))
+    # ATTEMPT 1: Stable Unpacking (Premium)
+    url_stable <- "https://financialmodelingprep.com/stable/revenue-product-segmentation"
+    message(paste(">>> FMP STABLE REQ:", ticker))
     
-    if (status_code(res_v4) == 200) {
-        raw_v4 <- fromJSON(content(res_v4, "text", encoding = "UTF-8"))
-        if (is.data.frame(raw_v4) && nrow(raw_v4) > 0) {
+    res <- GET(url_stable, query = list(symbol = ticker, period = "annual", structure = "flat", apikey = clean_key))
+    .GlobalEnv$last_api_status <- status_code(res)
+    
+    if (status_code(res) == 200) {
+        raw <- fromJSON(content(res, "text", encoding = "UTF-8"), simplifyVector = TRUE)
+        if (length(raw) > 0) {
+            # Take first row and flatten list-columns
+            row_data <- if(is.data.frame(raw)) raw[1, ] else raw[[1]]
+            
             meta_keys <- c("date", "symbol", "period", "fiscalYear", "reportedCurrency", "fillingDate", "acceptedDate", "cik")
-            return(raw_v4[1, ] %>% as.list() %>% unlist() %>% enframe(name = "segment", value = "revenue") %>%
-                       filter(!segment %in% meta_keys) %>% mutate(revenue = as.numeric(revenue)/1e6) %>%
-                       filter(!is.na(revenue), revenue > 0) %>%
-                       mutate(symbol = ticker, adj_margin = 0.25, growth_est = 0.10, source = "API"))
+            
+            # Process and scale revenue correctly
+            latest <- row_data %>% as.list() %>% unlist() %>% enframe(name = "segment", value = "revenue") %>%
+                filter(!segment %in% meta_keys) %>% 
+                mutate(revenue = as.numeric(revenue)/1e6) %>% # Standardize to Millions
+                filter(!is.na(revenue), revenue > 0) %>%
+                mutate(symbol = ticker, adj_margin = 0.25, growth_est = 0.10, source = "API")
+            
+            return(latest)
         }
     }
     
-    # v3 Fallover
-    url_v3 <- paste0("https://financialmodelingprep.com/stable/income-statement?symbol=", ticker)
-    res_v3 <- GET(url_v3, query = list(limit = 1, apikey = fmp_key))
+    # ATTEMPT 2: Fundamentals Fallback (Stable)
+    url_v3 <- "https://financialmodelingprep.com/stable/income-statement"
+    res_v3 <- GET(url_v3, query = list(symbol = ticker, limit = 1, apikey = clean_key))
+    
     if (status_code(res_v3) == 200) {
-        raw <- fromJSON(content(res_v3, "text", encoding = "UTF-8"))
-        if (is.data.frame(raw) && nrow(raw) > 0) {
-            inc <- raw[1, ]; rev <- as.numeric(inc$revenue)/1e6; oi <- as.numeric(inc$operatingIncome)/1e6
+        raw_v3 <- fromJSON(content(res_v3, "text", encoding = "UTF-8"))
+        if (is.data.frame(raw_v3) && nrow(raw_v3) > 0) {
+            inc <- raw_v3[1, ]; rev <- as.numeric(inc$revenue)/1e6; oi <- as.numeric(inc$operatingIncome)/1e6
             rd <- as.numeric(inc$researchAndDevelopmentExpenses %||% 0)/1e6
-            return(tibble(symbol=ticker, segment="Consolidated (Adjusted)", revenue=rev, 
-                          adj_margin=round((oi + (0.5*rd))/rev, 3), growth_est=0.10, source="API"))
+            return(tibble(symbol=ticker, segment="Consolidated (Stable API)", revenue=rev, 
+                          adj_margin=round((oi + (0.5 * rd)) / rev, 3), growth_est=0.10, source="API"))
         }
     }
-    return(tibble(symbol=ticker, segment="Manual Input Required", revenue=1000, adj_margin=0.15, growth_est=0.10, source="Manual"))
+    return(tibble(symbol=ticker, segment="Manual Input Mode", revenue=1000, adj_margin=0.15, growth_est=0.10, source="Manual"))
 }
 
-get_management_score <- function(ticker) {
-    api_key <- Sys.getenv("FMP_API_KEY")
-    url <- paste0("https://financialmodelingprep.com/stable/key-metrics?symbol=", ticker)
-    res <- GET(url, query = list(limit = 1, apikey = api_key))
+# --- 3. Key Metrics ---
+get_management_score <- function(ticker, fmp_key) {
+    url <- "https://financialmodelingprep.com/stable/key-metrics"
+    res <- GET(url, query = list(symbol = ticker, limit = 1, apikey = trimws(fmp_key)))
     roic_val <- 0.12
     if(status_code(res) == 200) {
         d <- fromJSON(content(res, "text", encoding = "UTF-8"))
-        if (is.data.frame(d) && nrow(d) > 0) {
-            roic_val <- as.numeric(d$roic[1] %||% d$returnOnInvestedCapital[1] %||% 0.12)
+        if (length(d) > 0) {
+            df_m <- if(is.data.frame(d)) d[1, ] else d[[1]]
+            roic_val <- as.numeric(df_m$roic %||% df_m$returnOnInvestedCapital %||% 0.12)
         }
     }
     list(roic = roic_val, score = if_else(roic_val > 0.15, 2, 1))
 }
 
-get_tiingo_price <- function(ticker) {
-    api_key <- Sys.getenv("TIINGO_API_KEY")
-    url <- paste0("https://api.tiingo.com/tiingo/daily/", ticker, "/prices")
-    res <- GET(url, query = list(token = api_key))
-    if (status_code(res) != 200) return(100)
+# Tiingo & Alpha Vantage remain the same (Hard-coded fallbacks for shares)
+get_tiingo_price <- function(ticker, tiingo_key) {
+    url <- paste0("https://api.tiingo.com/tiingo/daily/", ticker, "/prices?token=", trimws(tiingo_key))
+    res <- GET(url)
+    if (status_code(res) != 200) return(150)
     data <- fromJSON(content(res, "text", encoding = "UTF-8"))
-    return(as.numeric(data$adjClose[1]) %||% 100)
+    return(as.numeric(data$adjClose[1]) %||% 150)
 }
 
-get_av_shares <- function(ticker) {
-    av_key <- Sys.getenv("ALPHAVANTAGE_API_KEY")
+get_av_shares <- function(ticker, av_key) {
+    url <- paste0("https://www.alphavantage.co/query?function=OVERVIEW&symbol=", ticker, "&apikey=", trimws(av_key))
+    res <- GET(url)
     fallbacks <- list("NVDA" = 24.6, "AMZN" = 10.4, "MSFT" = 7.4, "AAPL" = 15.4, "GOOGL" = 13.9)
-    url <- "https://www.alphavantage.co/query"
-    res <- GET(url, query = list(`function` = "OVERVIEW", symbol = ticker, apikey = av_key))
     if (status_code(res) != 200) return(as.numeric(fallbacks[[ticker]] %||% 1.0))
     data <- fromJSON(content(res, "text", encoding = "UTF-8"))
     shares <- as.numeric(data$SharesOutstanding %||% (fallbacks[[ticker]]*1e9)) / 1e9
